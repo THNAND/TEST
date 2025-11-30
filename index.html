@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>中国手势识别版</title>
+    <title>极简手势-调试增强版</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -13,213 +13,210 @@
         body {
             background-color: #000000;
             color: #ffffff;
-            margin: 0;
-            padding: 0;
-            height: 100vh;
-            height: 100dvh; 
-            width: 100vw;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            margin: 0; padding: 0;
+            height: 100dvh; width: 100vw;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
             overflow: hidden;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            -webkit-user-select: none;
-            user-select: none;
+            font-family: monospace; /* 等宽字体方便看调试信息 */
+            user-select: none; -webkit-user-select: none;
         }
 
         .input_video {
-            position: absolute;
-            width: 1px; height: 1px;
-            opacity: 0; pointer-events: none;
+            position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none;
         }
 
         #number-display {
             font-size: 40vw;
             font-weight: 700;
-            opacity: 0;
-            transform: scale(0.8);
-            transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            text-shadow: 0 0 30px rgba(255, 255, 255, 0.3);
-            cursor: default;
+            line-height: 1;
+            transition: all 0.2s;
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
         }
 
-        #number-display.active {
-            opacity: 1;
-            transform: scale(1);
+        /* 调试条：显示当前识别到的手指状态 */
+        #debug-bar {
+            position: absolute; top: 10px;
+            font-size: 14px; color: #00ff00;
+            background: rgba(0,0,0,0.8);
+            padding: 5px; border-radius: 5px;
+            white-space: pre;
+            text-align: center;
+            z-index: 100;
+        }
+
+        #gesture-name {
+            position: absolute; bottom: 80px;
+            font-size: 20px; color: #aaa;
+            font-family: sans-serif;
         }
 
         #loading {
-            position: absolute; bottom: 50px;
-            font-size: 14px; color: #666;
-            text-align: center; width: 100%;
-            animation: pulse 1.5s infinite;
+            position: absolute; bottom: 30px;
+            font-size: 12px; color: #666;
+            animation: pulse 1s infinite;
         }
-        
-        #mode-hint {
-            position: absolute; top: 20px;
-            font-size: 12px; color: #444;
-            background: rgba(255,255,255,0.1);
-            padding: 5px 10px; border-radius: 20px;
-        }
-
-        @keyframes pulse { 0% {opacity:0.4} 50% {opacity:1} 100% {opacity:0.4} }
+        @keyframes pulse { 0%{opacity:0.5} 50%{opacity:1} 100%{opacity:0.5} }
     </style>
 </head>
 <body>
 
     <video class="input_video" playsinline webkit-playsinline muted autoplay></video>
 
-    <div id="mode-hint">支持中国单手手势 (6-9)</div>
+    <div id="debug-bar">等待摄像头...</div>
+    
     <div id="number-display"></div>
-    <div id="loading">正在加载神经网络...</div>
+    <div id="gesture-name"></div>
+    <div id="loading">初始化中...</div>
 
     <script>
         const videoElement = document.getElementsByClassName('input_video')[0];
         const displayElement = document.getElementById('number-display');
+        const debugBar = document.getElementById('debug-bar');
+        const gestureName = document.getElementById('gesture-name');
         const loadingElement = document.getElementById('loading');
         
-        let lastNumber = -1;
+        // 关键点映射
+        // 0:腕, 4:拇指尖, 8:食指尖, 12:中指尖, 16:无名指尖, 20:小指尖
+        // 5,9,13,17: 手指根部(MCP)
 
         function onResults(results) {
-            if(loadingElement.style.display !== 'none') loadingElement.style.display = 'none';
+            loadingElement.style.display = 'none';
 
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                // 取第一只手（为了稳定，暂时只处理单手逻辑调试）
+                const landmarks = results.multiHandLandmarks[0];
                 
-                let finalNumber = 0;
+                // 1. 获取五指状态 [拇, 食, 中, 无, 小] (true=直, false=弯)
+                const fingers = getFingerStates(landmarks);
+                
+                // 2. 更新调试条 (关键！)
+                // 显示类似: "1 0 0 0 1" (表示6)
+                const debugText = fingers.map(f => f ? "1" : "0").join(" ");
+                debugBar.innerText = `手指状态: [ ${debugText} ]\n(拇 食 中 无 小)`;
 
-                // 策略分支：单手 vs 双手
-                if (results.multiHandLandmarks.length === 1) {
-                    // === 单手模式：启用中国手势逻辑 ===
-                    const landmarks = results.multiHandLandmarks[0];
-                    const handedness = results.multiHandedness[0].label;
-                    finalNumber = detectChineseGesture(landmarks, handedness);
-                } else {
-                    // === 双手模式：简单累加 ===
-                    // 双手时，为了避免混淆，我们只计算伸出的手指总数
-                    // 比如左手比"八"(2指) + 右手比"二"(2指) = 显示 4，而不是 8+2
-                    // 这样符合人类直觉：双手是为了凑数
-                    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-                        finalNumber += countBasicFingers(results.multiHandLandmarks[i], results.multiHandedness[i].label);
-                    }
-                }
+                // 3. 判断数字
+                const number = identifyChineseNumber(fingers, landmarks);
                 
-                updateDisplay(finalNumber);
+                displayElement.innerText = number;
+                
+                // 辅助显示手势名称
+                if (number === 6) gestureName.innerText = "手势: 六 (6)";
+                else if (number === 7) gestureName.innerText = "手势: 七 (7)";
+                else if (number === 8) gestureName.innerText = "手势: 八 (8)";
+                else if (number === 9) gestureName.innerText = "手势: 九 (9)";
+                else gestureName.innerText = "";
 
             } else {
-                hideDisplay();
+                displayElement.innerText = "";
+                debugBar.innerText = "未检测到手";
+                gestureName.innerText = "";
             }
         }
 
-        // === 核心：中国手势识别器 ===
-        function detectChineseGesture(landmarks, handLabel) {
-            // 1. 获取五个手指的状态 (true=伸出, false=弯曲)
-            const f = getFingerStates(landmarks, handLabel);
+        // === 改进的手指状态检测算法 ===
+        function getFingerStates(lm) {
+            // lm = landmarks 数组
             
-            // f[0]=拇指, f[1]=食指, f[2]=中指, f[3]=无名指, f[4]=小指
-
-            // 基础数量 (有多少根手指伸出来了)
-            const basicCount = f.filter(Boolean).length;
-
-            // --- 特殊中国数字逻辑 ---
-
-            // 识别 6: 🤙 (拇指 + 小指)
-            // 逻辑: 拇指小指伸出，中间三指弯曲
-            if (f[0] && f[4] && !f[1] && !f[2] && !f[3]) return 6;
-
-            // 识别 8: 👆 (拇指 + 食指) - 俗称手枪或者八
-            // 逻辑: 拇指食指伸出，其他三指弯曲
-            if (f[0] && f[1] && !f[2] && !f[3] && !f[4]) return 8;
-
-            // 识别 7: 捏指 或 拇指+食指+中指
-            // 很多中国人比7是捏在一起，或者三指伸出。
-            // 逻辑: 拇指+食指+中指伸出，无名指小指弯曲
-            if (f[0] && f[1] && f[2] && !f[3] && !f[4]) return 7;
-
-            // 识别 9: ☝️ (食指钩子)
-            // 逻辑: 这是一个难点。通常看起来像握拳(0)或者指得像1。
-            // 这里的判定规则：食指的指尖(8)低于指关节(6)，但是指关节(6)明显高于掌关节(5)。
-            // 且其他手指是弯曲的。
-            if (!f[1] && !f[2] && !f[3] && !f[4]) {
-                // 如果基本判定全是弯曲的（像拳头），检查食指是不是“钩”着的
-                const indexPipY = landmarks[6].y; // 第二关节
-                const indexMcpY = landmarks[5].y; // 根部关节
-                const indexTipY = landmarks[8].y; // 指尖
-
-                // 如果食指第二关节 明显高于 根部 (注意Y轴向下为正，所以是 < )
-                // 并且指尖 低于 第二关节 (弯下来了)
-                // *增加一个阈值判断，防止误触*
-                if (indexPipY < indexMcpY && indexTipY > indexPipY) {
-                    // 再检查一下是不是只有食指在动作，其他手指必须收紧
-                    return 9;
-                }
-            }
-
-            // 如果没有匹配到特殊手势，就返回基础数量 (0-5)
-            return basicCount;
-        }
-
-        // 辅助：获取五指状态 [拇指, 食指, 中指, 无名指, 小指]
-        function getFingerStates(landmarks, handLabel) {
+            // 判断手指 2,3,4,5 (食指到小指)
+            // 逻辑：指尖(Tip) 到 掌心(0) 的距离 > 指根(MCP) 到 掌心(0) 的距离
+            // 这种距离法比单纯对比 Y 轴更抗旋转
+            const mcpIds = [5, 9, 13, 17];
+            const tipIds = [8, 12, 16, 20];
+            
             let states = [false, false, false, false, false];
-            
-            // 检查食指(1) 到 小指(4)
-            const tipsIds = [8, 12, 16, 20];
-            const pipIds = [6, 10, 14, 18];
+
+            // 检查食指到小指
             for (let i = 0; i < 4; i++) {
-                // 指尖 Y < 关节 Y 表示伸出 (坐标原点在左上角)
-                if (landmarks[tipsIds[i]].y < landmarks[pipIds[i]].y) {
+                // 计算距离平方 (避免开根号，性能更好)
+                const distTip = getDistSq(lm[tipIds[i]], lm[0]); // 指尖到手腕
+                const distMcp = getDistSq(lm[mcpIds[i]], lm[0]); // 指根到手腕
+                
+                // 如果指尖距离手腕 明显远于 指根距离手腕，说明伸直了
+                // 系数 1.2 是为了容错，稍微弯一点点也算伸直
+                if (distTip > distMcp * 1.2) {
                     states[i+1] = true;
                 }
             }
 
-            // 检查拇指(0) - 依赖 X 轴
-            const thumbTip = landmarks[4].x;
-            const thumbIP = landmarks[3].x;
-            if (handLabel === 'Right') { // 画面左侧
-                if (thumbTip < thumbIP) states[0] = true;
-            } else { // 画面右侧
-                if (thumbTip > thumbIP) states[0] = true;
+            // 检查拇指 (难点)
+            // 逻辑：拇指尖(4) 到 小指根(17) 的距离
+            // 如果伸出，距离远；如果弯曲，距离近。
+            const thumbTip = lm[4];
+            const pinkyMcp = lm[17];
+            const indexMcp = lm[5];
+
+            const distThumbPinky = getDistSq(thumbTip, pinkyMcp);
+            const distIndexPinky = getDistSq(indexMcp, pinkyMcp); // 作为参考长度
+
+            // 如果拇指尖到小指根的距离 > 食指根到小指根的距离，通常是张开的
+            if (distThumbPinky > distIndexPinky) {
+                states[0] = true;
             }
 
             return states;
         }
 
-        // 辅助：仅计算伸出的手指数量 (用于双手模式)
-        function countBasicFingers(landmarks, handLabel) {
-            const states = getFingerStates(landmarks, handLabel);
-            return states.filter(Boolean).length;
+        // 计算两点距离平方
+        function getDistSq(p1, p2) {
+            return (p1.x - p2.x)**2 + (p1.y - p2.y)**2;
         }
 
-        // --- UI 更新逻辑 (不变) ---
-        function updateDisplay(number) {
-            if (number !== lastNumber) {
-                lastNumber = number;
-                displayElement.innerText = number;
-                displayElement.classList.add('active');
+        // === 中国数字识别逻辑 ===
+        function identifyChineseNumber(f, lm) {
+            // f 是一个布尔数组 [拇, 食, 中, 无, 小]
+            
+            // 基础数量 (有多少根手指是真的直的)
+            const count = f.filter(Boolean).length;
+
+            // --- 特殊判定 ---
+
+            // 6: 拇指(T) + 小指(T)，中间三个(F)
+            if (f[0] && f[4] && !f[1] && !f[2] && !f[3]) return 6;
+
+            // 8: 拇指(T) + 食指(T)，其他(F)
+            if (f[0] && f[1] && !f[2] && !f[3] && !f[4]) return 8;
+            
+            // 7: 拇指(T) + 食指(T) + 中指(T) 
+            // 或者是"捏指"？捏指时 fingers 全是 false。
+            // 既然难以识别捏指，我们强制定义 7 为 "三指张开"
+            if (f[0] && f[1] && f[2] && !f[3] && !f[4]) return 7;
+
+            // 9: 勾指。
+            // 特征：所有手指看起来都是弯的(count=0 或 1)，但食指形态特殊。
+            // 简化版：如果全弯(类似拳头)，但食指的指根(5)位置很高，判定为9。
+            // 或者：为了体验，我们定义 9 为：除了无名指，其他都伸直？(不，这不符合习惯)
+            // 让我们用一个简单的“排除法”：
+            // 如果看起来像拳头(count=0)，且食指的第二关节(6)是所有手指关节中最高的(y最小)，判定为9。
+            if (count === 0 || (count === 1 && f[1])) {
+                 // 获取四个手指第二关节的 Y 坐标 (注意Y向下为正)
+                 const pips = [lm[6].y, lm[10].y, lm[14].y, lm[18].y];
+                 const minPip = Math.min(...pips); // 找最高点
+                 
+                 // 如果食指关节(index=0 in pips)是最高的
+                 if (pips[0] === minPip) {
+                     // 还要确保不是完全的拳头，食指得稍微突出来一点
+                     // 这里为了容易触发，直接假设如果你握拳并把食指翘高一点，就是9
+                     return 9;
+                 }
+                 return 0; // 否则就是0
             }
-            if (!displayElement.classList.contains('active')) displayElement.classList.add('active');
+
+            return count;
         }
 
-        function hideDisplay() {
-            displayElement.classList.remove('active');
-            setTimeout(() => {
-                if(!displayElement.classList.contains('active')) lastNumber = -1;
-            }, 350);
-        }
-
-        // --- 初始化 (不变) ---
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         hands.setOptions({
-            maxNumHands: 2, 
+            maxNumHands: 1, // 先专注调通单手
             modelComplexity: 1,
-            minDetectionConfidence: 0.6,
-            minTrackingConfidence: 0.6
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
         });
         hands.onResults(onResults);
 
         const camera = new Camera(videoElement, {
             onFrame: async () => await hands.send({image: videoElement}),
-            width: 1280, height: 720, facingMode: 'user'
+            width: 640, height: 480, facingMode: 'user'
         });
         camera.start();
     </script>
