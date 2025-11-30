@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>极简手势猜数字</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            background-color: #000000;
+            color: #ffffff;
+            margin: 0;
+            padding: 0;
+            /* 兼容 iOS Safari 动态地址栏 */
+            height: 100vh;
+            height: 100dvh; 
+            width: 100vw;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            /* 禁止 iOS 上的长按选中 */
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+        }
+
+        /* 关键：iOS 必须隐藏视频但保留 DOM 结构 */
+        .input_video {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        #number-display {
+            font-size: 40vw; /* 手机上字体更大一点 */
+            font-weight: 700;
+            opacity: 0;
+            transform: scale(0.8);
+            transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+            cursor: default;
+        }
+
+        #number-display.active {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        #loading {
+            position: absolute;
+            bottom: 40px; /* 避开 iOS 底部横条 */
+            font-size: 14px;
+            color: #444;
+            animation: pulse 1.5s infinite;
+            text-align: center;
+            width: 100%;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.3; }
+            50% { opacity: 0.8; }
+            100% { opacity: 0.3; }
+        }
+    </style>
+</head>
+<body>
+
+    <video class="input_video" playsinline webkit-playsinline muted autoplay></video>
+
+    <div id="number-display"></div>
+    <div id="loading">正在启动摄像头...<br><span style="font-size:10px; opacity:0.6">请允许相机权限</span></div>
+
+    <script>
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const displayElement = document.getElementById('number-display');
+        const loadingElement = document.getElementById('loading');
+        
+        let lastNumber = -1;
+
+        function onResults(results) {
+            if(loadingElement.style.display !== 'none') {
+                loadingElement.style.display = 'none';
+            }
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                const handedness = results.multiHandedness[0].label;
+                const count = countFingers(landmarks, handedness);
+                updateDisplay(count);
+            } else {
+                hideDisplay();
+            }
+        }
+
+        function countFingers(landmarks, handLabel) {
+            let count = 0;
+            const tipsIds = [8, 12, 16, 20];
+            const pipIds = [6, 10, 14, 18];
+
+            for (let i = 0; i < 4; i++) {
+                if (landmarks[tipsIds[i]].y < landmarks[pipIds[i]].y) {
+                    count++;
+                }
+            }
+
+            const thumbTip = landmarks[4].x;
+            const thumbIP = landmarks[3].x;
+            
+            // 手机竖屏时，MediaPipe 的左右手判断可能受镜像影响，这里保持通用逻辑
+            if (handLabel === 'Right') {
+                if (thumbTip < thumbIP) count++;
+            } else {
+                if (thumbTip > thumbIP) count++;
+            }
+
+            return count;
+        }
+
+        function updateDisplay(number) {
+            if (number !== lastNumber) {
+                lastNumber = number;
+                displayElement.innerText = number;
+                displayElement.classList.add('active');
+            }
+            if (!displayElement.classList.contains('active')) {
+                displayElement.classList.add('active');
+            }
+        }
+
+        function hideDisplay() {
+            displayElement.classList.remove('active');
+            setTimeout(() => {
+                if(!displayElement.classList.contains('active')) {
+                   lastNumber = -1;
+                }
+            }, 400);
+        }
+
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1, // 手机性能一般较好，用1平衡精度
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+        });
+
+        hands.onResults(onResults);
+
+        // 针对手机摄像头的优化配置
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 1280, // 降低分辨率有助于老旧iPhone保持流畅
+            height: 720,
+            facingMode: 'user' // 强制使用前置摄像头
+        });
+
+        camera.start();
+    </script>
+</body>
+</html>
